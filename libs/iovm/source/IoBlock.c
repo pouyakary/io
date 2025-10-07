@@ -229,6 +229,7 @@ IoObject *IoBlock_activate(IoBlock *self, IoObject *target, IoObject *locals,
         PHash_at_put_(bslots, state->selfSymbol, scope);
         PHash_at_put_(bslots, state->updateSlotSymbol,
                       state->localsUpdateSlotCFunc);
+        IoObject_inlineCacheBumpVersion_(blockLocals);
     }
 
     IoObject_isReferenced_(blockLocals, 0);

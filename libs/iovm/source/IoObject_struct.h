@@ -43,6 +43,7 @@ struct IoObjectData {
     PHash *slots;
     List *listeners;
     IoObject **protos;
+    uint32_t inlineCacheVersion;
 
     unsigned int hasDoneLookup : 1; // used to avoid slot lookup loops
     unsigned int
@@ -111,6 +112,11 @@ struct IoObjectData {
 #define IoObject_hasDoneLookup_(self, v)                                       \
     IoObject_deref(self)->hasDoneLookup = v;
 #define IoObject_hasDoneLookup(self) (IoObject_deref(self)->hasDoneLookup)
+
+#define IoObject_inlineCacheVersion(self)                                      \
+    (IoObject_deref(self)->inlineCacheVersion)
+#define IoObject_setInlineCacheVersion_(self, v)                               \
+    IoObject_deref(self)->inlineCacheVersion = (uint32_t)(v);
 
 #define IoObject_isSymbol_(self, v) IoObject_deref(self)->isSymbol = v;
 #define IoObject_isSymbol(self) (IoObject_deref(self)->isSymbol)

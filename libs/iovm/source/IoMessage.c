@@ -42,6 +42,7 @@ now.
 #include "IoSeq.h"
 #include <ctype.h>
 #include <stdarg.h>
+#include <string.h>
 #include "IoMessage_parser.h"
 #include "IoMessage_opShuffle.h"
 
@@ -196,6 +197,7 @@ void IoMessage_copy_(IoMessage *self, IoMessage *other) {
     IoMessage_rawSetNext_(self, DATA(other)->next);
     IoMessage_rawSetCachedResult_(self, DATA(other)->cachedResult);
     IoMessage_rawCopySourceLocation(self, other);
+    IoMessage_inlineCacheClear(self);
 }
 
 void IoMessage_rawCopySourceLocation(IoMessage *self, IoMessage *other) {
@@ -255,6 +257,143 @@ IoMessage *IoMessage_newWithName_andCachedArg_(void *state, IoSymbol *symbol,
     return self;
 }
 
+static IoMessageInlineCache *IoMessage_inlineCacheEnsure(IoMessage *self) {
+    IoMessageData *data = DATA(self);
+
+    if (!data->inlineCache) {
+        data->inlineCache =
+            (IoMessageInlineCache *)io_calloc(1, sizeof(IoMessageInlineCache));
+    }
+
+    return data->inlineCache;
+}
+
+void IoMessage_inlineCacheClear(IoMessage *self) {
+    IoMessageInlineCache *cache = DATA(self)->inlineCache;
+
+    if (cache) {
+        memset(cache, 0, sizeof(IoMessageInlineCache));
+    }
+}
+
+static void IoMessage_inlineCacheMoveHitToFront(IoMessageInlineCache *cache,
+                                                size_t index) {
+    if (index == 0) {
+        return;
+    }
+
+    IoMessageInlineCacheEntry hit = cache->entries[index];
+    memmove(&cache->entries[1], &cache->entries[0],
+            index * sizeof(IoMessageInlineCacheEntry));
+    cache->entries[0] = hit;
+}
+
+int IoMessage_inlineCacheLookup_(IoMessage *self, IoObject *target,
+                                 IoObject **context, IoObject **slotValue) {
+    IoMessageInlineCache *cache = DATA(self)->inlineCache;
+
+    if (!cache || cache->size == 0) {
+        return 0;
+    }
+
+    IoTag *targetTag = IoObject_tag(target);
+    IoObject *primaryProto = IoObject_firstProto(target);
+    uint32_t targetVersion = IoObject_inlineCacheVersion(target);
+
+    for (size_t i = 0; i < cache->size; i++) {
+        IoMessageInlineCacheEntry *entry = &cache->entries[i];
+
+        if (entry->targetTag != targetTag) {
+            continue;
+        }
+
+        if (entry->targetVersion != targetVersion) {
+            continue;
+        }
+
+        if (entry->primaryProto && entry->primaryProto != primaryProto) {
+            continue;
+        }
+
+        if (!entry->context) {
+            continue;
+        }
+
+        if (entry->contextVersion !=
+            IoObject_inlineCacheVersion(entry->context)) {
+            continue;
+        }
+
+        if (entry->isLocal && entry->context != target) {
+            continue;
+        }
+
+        *context = entry->context;
+        *slotValue = entry->slotValue;
+
+        IoMessage_inlineCacheMoveHitToFront(cache, i);
+        return 1;
+    }
+
+    return 0;
+}
+
+static void IoMessage_inlineCacheStoreAtFront(IoMessageInlineCache *cache,
+                                              IoMessageInlineCacheEntry *entry,
+                                              size_t index) {
+    IoMessageInlineCacheEntry updated = *entry;
+
+    memmove(&cache->entries[1], &cache->entries[0],
+            index * sizeof(IoMessageInlineCacheEntry));
+    cache->entries[0] = updated;
+}
+
+void IoMessage_inlineCacheUpdate_(IoMessage *self, IoObject *target,
+                                  IoObject *context, IoObject *slotValue) {
+    if (!context || !slotValue) {
+        return;
+    }
+
+    IoMessageInlineCache *cache = IoMessage_inlineCacheEnsure(self);
+    IoTag *targetTag = IoObject_tag(target);
+    IoObject *primaryProto = IoObject_firstProto(target);
+    uint32_t targetVersion = IoObject_inlineCacheVersion(target);
+    uint32_t contextVersion = IoObject_inlineCacheVersion(context);
+    uint8_t isLocal = (context == target);
+
+    IoMessageInlineCacheEntry newEntry = {0};
+    newEntry.targetTag = targetTag;
+    newEntry.primaryProto = primaryProto ? IOREF(primaryProto) : NULL;
+    newEntry.context = IOREF(context);
+    newEntry.slotValue = IOREF(slotValue);
+    newEntry.targetVersion = targetVersion;
+    newEntry.contextVersion = contextVersion;
+    newEntry.isLocal = isLocal;
+
+    for (size_t i = 0; i < cache->size; i++) {
+        IoMessageInlineCacheEntry *entry = &cache->entries[i];
+
+        if (entry->targetTag == targetTag && entry->context == context) {
+            IoMessage_inlineCacheStoreAtFront(cache, &newEntry, i);
+            return;
+        }
+    }
+
+    size_t limit = IOMESSAGE_INLINE_CACHE_LIMIT;
+    size_t entriesToMove = cache->size < limit ? cache->size : limit - 1;
+
+    if (entriesToMove > 0) {
+        memmove(&cache->entries[1], &cache->entries[0],
+                entriesToMove * sizeof(IoMessageInlineCacheEntry));
+    }
+
+    cache->entries[0] = newEntry;
+
+    if (cache->size < limit) {
+        cache->size++;
+    }
+}
+
 void IoMessage_mark(IoMessage *self) {
     IoObject_shouldMarkIfNonNull(DATA(self)->name);
     IoObject_shouldMarkIfNonNull(DATA(self)->cachedResult);
@@ -265,6 +404,17 @@ void IoMessage_mark(IoMessage *self) {
 
     IoObject_shouldMarkIfNonNull((IoObject *)DATA(self)->next);
     IoObject_shouldMarkIfNonNull((IoObject *)DATA(self)->label);
+
+    if (DATA(self)->inlineCache) {
+        IoMessageInlineCache *cache = DATA(self)->inlineCache;
+
+        for (size_t i = 0; i < cache->size; i++) {
+            IoMessageInlineCacheEntry *entry = &cache->entries[i];
+            IoObject_shouldMarkIfNonNull(entry->primaryProto);
+            IoObject_shouldMarkIfNonNull(entry->context);
+            IoObject_shouldMarkIfNonNull(entry->slotValue);
+        }
+    }
 }
 
 void IoMessage_free(IoMessage *self) {
@@ -272,6 +422,11 @@ void IoMessage_free(IoMessage *self) {
 
     if (DATA(self)->args) {
         List_free(DATA(self)->args);
+    }
+
+    if (DATA(self)->inlineCache) {
+        io_free(DATA(self)->inlineCache);
+        DATA(self)->inlineCache = NULL;
     }
 
     io_free(IoObject_dataPointer(self));
@@ -775,7 +930,7 @@ IO_METHOD(IoMessage, protoSetName) {
     Sets the name of the receiver. Returns self.
     */
     IoMessage_rawSetName_(self, IoMessage_locals_symbolArgAt_(m, locals, 0));
-    // IoMessage_cacheIfPossible(self);
+    IoMessage_inlineCacheClear(self);
     return self;
 }
 

@@ -125,6 +125,7 @@ IO_METHOD(IoObject, for)
                 num = IONUMBER(i);
                 IoObject_addingRef_(locals, num);
                 PHash_at_put_(IoObject_slots(locals), slotName, num);
+                IoObject_inlineCacheBumpVersion_(locals);
 
                 // IoObject_setSlot_to_(self, slotName, num);
             }

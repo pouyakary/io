@@ -190,10 +190,21 @@ IOINLINE void IoObject_createSlotsIfNeeded(IoObject *self) {
     }
 }
 
+IOINLINE void IoObject_inlineCacheBumpVersion_(IoObject *self) {
+    uint32_t version = IoObject_inlineCacheVersion(self) + 1;
+
+    if (version == 0) {
+        version = 1;
+    }
+
+    IoObject_setInlineCacheVersion_(self, version);
+}
+
 IOINLINE void IoObject_rawRemoveAllProtos(IoObject *self) {
     // IoObject_createSlotsIfNeeded(self);
     memset(IoObject_protos(self), 0,
            IoObject_rawProtosCount(self) * sizeof(IoObject *));
+    IoObject_inlineCacheBumpVersion_(self);
 }
 
 IOINLINE void IoObject_shouldMark(IoObject *self) {
@@ -243,6 +254,7 @@ IOINLINE void IoObject_inlineSetSlot_to_(IoObject *self, IoSymbol *slotName,
     PHash_at_put_(IoObject_slots(self), IOREF(slotName), IOREF(value));
 
     IoObject_isDirty_(self, 1);
+    IoObject_inlineCacheBumpVersion_(self);
     /*
     if(PHash_at_put_(IoObject_slots(self), IOREF(slotName), IOREF(value)))
     {
@@ -427,11 +439,17 @@ IOINLINE IO_METHOD(IoObject, forward) {
 }
 
 IOINLINE IO_METHOD(IoObject, perform) {
-    IoObject *context;
-    IoObject *slotValue =
-        IoObject_rawGetSlot_context_(self, IoMessage_name(m), &context);
+    IoObject *context = NULL;
+    IoObject *slotValue = NULL;
+
+    if (IoMessage_inlineCacheLookup_(m, self, &context, &slotValue)) {
+        return IoObject_activate(slotValue, self, locals, m, context);
+    }
+
+    slotValue = IoObject_rawGetSlot_context_(self, IoMessage_name(m), &context);
 
     if (slotValue) {
+        IoMessage_inlineCacheUpdate_(m, self, context, slotValue);
         return IoObject_activate(slotValue, self, locals, m, context);
     }
 

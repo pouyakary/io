@@ -47,6 +47,7 @@ IoObject *IoObject_justAlloc(IoState *state) {
     IoObject *child = Collector_newMarker(state->collector);
     CollectorMarker_setObject_(child, io_calloc(1, sizeof(IoObjectData)));
     IoObject_protos_(child, (IoObject **)io_calloc(2, sizeof(IoObject *)));
+    IoObject_setInlineCacheVersion_(child, 1);
     return child;
 }
 
@@ -348,6 +349,8 @@ IoObject *IoObject_rawClone(IoObject *proto) {
     // IoObject_setDataPointer_(self, IoObject_dataPointer(proto)); // is this
     // right?
     IoObject_isDirty_(self, 1);
+    IoObject_setInlineCacheVersion_(
+        self, IoObject_inlineCacheVersion(proto));
     return self;
 }
 
@@ -357,6 +360,8 @@ IoObject *IoObject_rawClonePrimitive(IoObject *proto) {
     IoObject_setProtoTo_(self, proto);
     IoObject_setDataPointer_(self, NULL);
     IoObject_isDirty_(self, 1);
+    IoObject_setInlineCacheVersion_(
+        self, IoObject_inlineCacheVersion(proto));
     return self;
 }
 
@@ -387,6 +392,7 @@ void IoObject_rawAppendProto_(IoObject *self, IoObject *p) {
                                       (count + 2) * sizeof(IoObject *)));
     IoObject_protos(self)[count] = IOREF(p);
     IoObject_protos(self)[count + 1] = NULL;
+    IoObject_inlineCacheBumpVersion_(self);
 }
 
 void IoObject_rawPrependProto_(IoObject *self, IoObject *p) {
@@ -403,6 +409,7 @@ void IoObject_rawPrependProto_(IoObject *self, IoObject *p) {
     }
 
     IoObject_protoAtPut_(self, 0, IOREF(p));
+    IoObject_inlineCacheBumpVersion_(self);
 }
 
 void IoObject_rawRemoveProto_(IoObject *self, IoObject *p) {
@@ -419,6 +426,7 @@ void IoObject_rawRemoveProto_(IoObject *self, IoObject *p) {
 
         index++;
     }
+    IoObject_inlineCacheBumpVersion_(self);
 }
 
 /*
@@ -611,6 +619,7 @@ void IoObject_free(IoObject *self) // prepare for io_free and possibly recycle
         */
 
         List_append_(IOSTATE->recycledObjects, self);
+        IoObject_setInlineCacheVersion_(self, 1);
     }
 #endif
 }
@@ -785,6 +794,7 @@ void IoObject_setSlot_to_(IoObject *self, IoSymbol *slotName, IoObject *value) {
 void IoObject_removeSlot_(IoObject *self, IoSymbol *slotName) {
     IoObject_createSlotsIfNeeded(self);
     PHash_removeKey_(IoObject_slots(self), slotName);
+    IoObject_inlineCacheBumpVersion_(self);
 }
 
 IoObject *IoObject_rawGetSlot_target_(IoObject *self, IoSymbol *slotName,
@@ -1148,6 +1158,7 @@ IO_METHOD(IoObject, protoRemoveSlot) {
     IoSymbol *slotName = IoMessage_locals_symbolArgAt_(m, locals, 0);
     IoObject_createSlotsIfNeeded(self);
     PHash_removeKey_(IoObject_slots(self), slotName);
+    IoObject_inlineCacheBumpVersion_(self);
     return self;
 }
 
@@ -1157,6 +1168,7 @@ IO_METHOD(IoObject, protoRemoveAllSlots) {
     */
 
     PHash_clean(IoObject_slots(self));
+    IoObject_inlineCacheBumpVersion_(self);
     return self;
 }
 

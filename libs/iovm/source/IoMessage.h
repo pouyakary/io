@@ -34,6 +34,26 @@ typedef IoObject IoMessage;
 
 #define IOMESSAGE_HASPREV
 
+typedef struct IoMessageInlineCacheEntry IoMessageInlineCacheEntry;
+typedef struct IoMessageInlineCache IoMessageInlineCache;
+
+struct IoMessageInlineCacheEntry {
+    IoTag *targetTag;
+    IoObject *primaryProto;
+    IoObject *context;
+    IoObject *slotValue;
+    uint32_t targetVersion;
+    uint32_t contextVersion;
+    uint8_t isLocal;
+};
+
+#define IOMESSAGE_INLINE_CACHE_LIMIT 4
+
+struct IoMessageInlineCache {
+    uint8_t size;
+    IoMessageInlineCacheEntry entries[IOMESSAGE_INLINE_CACHE_LIMIT];
+};
+
 typedef struct {
     IoSymbol *name;
     List *args;
@@ -47,6 +67,7 @@ typedef struct {
     // int charNumber;
     int lineNumber;
     IoSymbol *label;
+    IoMessageInlineCache *inlineCache;
 } IoMessageData;
 
 #define IOMESSAGEDATA(self) ((IoMessageData *)IoObject_dataPointer(self))
@@ -99,6 +120,14 @@ IOVM_API IO_METHOD(IoMessage, doInContext);
 IOVM_API IoObject *IoMessage_locals_performOn_(IoMessage *self,
                                                IoObject *locals,
                                                IoObject *target);
+
+IOVM_API void IoMessage_inlineCacheClear(IoMessage *self);
+IOVM_API int IoMessage_inlineCacheLookup_(IoMessage *self, IoObject *target,
+                                          IoObject **context,
+                                          IoObject **slotValue);
+IOVM_API void IoMessage_inlineCacheUpdate_(IoMessage *self, IoObject *target,
+                                           IoObject *context,
+                                           IoObject *slotValue);
 
 // args
 
